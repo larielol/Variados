@@ -1,0 +1,113 @@
+import java.awt.image.BufferedImage;
+import java.io.File;
+import java.io.IOException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+
+import javax.imageio.ImageIO;
+
+public class ConcurrentImageMeanFilter {
+
+    public static void applyMeanFilter(String inputPath, String outputPath, int kernelSize, int threadCount) throws IOException {
+        // Load the image
+        BufferedImage originalImage = ImageIO.read(new File(inputPath));
+        BufferedImage filteredImage = new BufferedImage(
+            originalImage.getWidth(),
+            originalImage.getHeight(),
+            BufferedImage.TYPE_INT_RGB
+        );
+
+        int width = originalImage.getWidth();
+        int height = originalImage.getHeight();
+
+        // Create a thread pool
+        ExecutorService executor = Executors.newFixedThreadPool(threadCount);
+
+        // Divide the image into horizontal strips, one per thread
+        int stripHeight = height / threadCount;
+
+        for (int i = 0; i < threadCount; i++) {
+            int startY = i * stripHeight;
+            int endY = (i == threadCount - 1) ? height : startY + stripHeight;
+
+            // Submit a task for each strip
+            executor.submit(() -> processStrip(originalImage, filteredImage, kernelSize, startY, endY));
+        }
+
+        // Shutdown the executor and wait for all threads to finish
+        executor.shutdown();
+        while (!executor.isTerminated()) {
+            // Wait for all threads to complete
+        }
+
+        // Save the filtered image
+        ImageIO.write(filteredImage, "jpg", new File(outputPath));
+    }
+
+    private static void processStrip(BufferedImage originalImage, BufferedImage filteredImage, int kernelSize, int startY, int endY) {
+        int width = originalImage.getWidth();
+
+        for (int y = startY; y < endY; y++) {
+            for (int x = 0; x < width; x++) {
+                // Calculate neighborhood average
+                int[] avgColor = calculateNeighborhoodAverage(originalImage, x, y, kernelSize);
+
+                // Set filtered pixel
+                synchronized (filteredImage) {
+                    filteredImage.setRGB(x, y, (avgColor[0] << 16) | (avgColor[1] << 8) | avgColor[2]);
+                }
+            }
+        }
+    }
+
+    private static int[] calculateNeighborhoodAverage(BufferedImage image, int centerX, int centerY, int kernelSize) {
+        int width = image.getWidth();
+        int height = image.getHeight();
+        int pad = kernelSize / 2;
+
+        long redSum = 0, greenSum = 0, blueSum = 0;
+        int pixelCount = 0;
+
+        for (int dy = -pad; dy <= pad; dy++) {
+            for (int dx = -pad; dx <= pad; dx++) {
+                int x = centerX + dx;
+                int y = centerY + dy;
+
+                if (x >= 0 && x < width && y >= 0 && y < height) {
+                    int rgb = image.getRGB(x, y);
+                    int red = (rgb >> 16) & 0xFF;
+                    int green = (rgb >> 8) & 0xFF;
+                    int blue = rgb & 0xFF;
+
+                    redSum += red;
+                    greenSum += green;
+                    blueSum += blue;
+                    pixelCount++;
+                }
+            }
+        }
+
+        return new int[] {
+            (int) (redSum / pixelCount),
+            (int) (greenSum / pixelCount),
+            (int) (blueSum / pixelCount)
+        };
+    }
+
+    public static void main(String[] args) {
+        if (args.length < 3) {
+            System.err.println("Usage: java ConcurrentImageMeanFilter <input_file> <output_file> <thread_count>");
+            System.exit(1);
+        }
+
+        String inputFile = args[0];
+        String outputFile = args[1];
+        int threadCount = Integer.parseInt(args[2]);
+
+        try {
+            applyMeanFilter(inputFile, outputFile, 3, threadCount);
+        } catch (IOException e) {
+            System.err.println("Error processing image: " + e.getMessage());
+        }
+    }
+}
