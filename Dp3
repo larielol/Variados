@@ -1,0 +1,141 @@
+import java.io.File;
+import java.io.IOException;
+import java.io.BufferedReader;
+import java.io.FileReader;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.atomic.AtomicLong;
+
+public class DnaConcurrentMain {
+
+    public static void main(String[] args) {
+        if (args.length < 2) {
+            System.err.println("Uso: java DnaConcurrentMain DIRETORIO_ARQUIVOS PADRAO");
+            System.err.println("Exemplo: java DnaConcurrentMain dataset CGTAA");
+            System.exit(1);
+        }
+
+        String dirName = args[0];
+        String pattern = args[1];
+
+        File dir = new File(dirName);
+        if (!dir.isDirectory()) {
+            System.err.println("Caminho não é um diretório: " + dirName);
+            System.exit(2);
+        }
+
+        File[] files = dir.listFiles((d, name) -> name.endsWith(".txt"));
+        if (files == null || files.length == 0) {
+            System.err.println("Nenhum arquivo .txt encontrado em: " + dirName);
+            System.exit(3);
+        }
+
+        try {
+            long startTime = System.currentTimeMillis();
+            long total = processFilesConcurrently(files, pattern);
+            long endTime = System.currentTimeMillis();
+            
+            System.out.println("Sequência " + pattern + " foi encontrada " + total + " vezes.");
+            System.out.println("Tempo de execução: " + (endTime - startTime) + " ms");
+        } catch (Exception e) {
+            System.err.println("Erro ao processar arquivos: " + e.getMessage());
+            System.exit(4);
+        }
+    }
+
+    public static long processFilesConcurrently(File[] files, String pattern) 
+            throws InterruptedException {
+        
+        // Usando AtomicLong para contagem thread-safe
+        AtomicLong totalCount = new AtomicLong(0);
+        
+        // Determinar número de threads (pode ajustar conforme necessidade)
+        int numThreads = Math.min(files.length, Runtime.getRuntime().availableProcessors());
+        int filesPerThread = files.length / numThreads;
+        int remainingFiles = files.length % numThreads;
+        
+        List<Thread> threads = new ArrayList<>();
+        int startIndex = 0;
+        
+        // Criar e iniciar threads
+        for (int i = 0; i < numThreads; i++) {
+            int threadFileCount = filesPerThread + (i < remainingFiles ? 1 : 0);
+            if (threadFileCount == 0) continue;
+            
+            File[] threadFiles = new File[threadFileCount];
+            System.arraycopy(files, startIndex, threadFiles, 0, threadFileCount);
+            startIndex += threadFileCount;
+            
+            Thread thread = new Thread(new FileProcessor(threadFiles, pattern, totalCount));
+            threads.add(thread);
+            thread.start();
+        }
+        
+        // Esperar todas as threads terminarem
+        for (Thread thread : threads) {
+            thread.join();
+        }
+        
+        return totalCount.get();
+    }
+
+    // Classe de trabalho para processar arquivos
+    static class FileProcessor implements Runnable {
+        private final File[] files;
+        private final String pattern;
+        private final AtomicLong totalCount;
+        
+        public FileProcessor(File[] files, String pattern, AtomicLong totalCount) {
+            this.files = files;
+            this.pattern = pattern;
+            this.totalCount = totalCount;
+        }
+        
+        @Override
+        public void run() {
+            long localCount = 0;
+            try {
+                for (File file : files) {
+                    localCount += countInFile(file, pattern);
+                }
+                // Adicionar ao total global de forma atômica
+                totalCount.addAndGet(localCount);
+            } catch (IOException e) {
+                System.err.println("Erro na thread " + Thread.currentThread().getId() + 
+                                 ": " + e.getMessage());
+            }
+        }
+    }
+
+    public static long countInFile(File file, String pattern) throws IOException {
+        long total = 0;
+        try (BufferedReader br = new BufferedReader(new FileReader(file))) {
+            String line;
+            while ((line = br.readLine()) != null) {
+                line = line.trim();
+                if (!line.isEmpty()) {
+                    total += countInSequence(line, pattern);
+                }
+            }
+        }
+        return total;    
+    }
+
+    public static long countInSequence(String sequence, String pattern) {
+        if (sequence == null || pattern == null) {
+            return 0;
+        }
+        int n = sequence.length();
+        int m = pattern.length();
+        if (m == 0 || n < m) {
+            return 0;
+        }
+        long count = 0;
+        for (int i = 0; i <= n - m; i++) {
+            if (sequence.regionMatches(false, i, pattern, 0, m)) {
+                count++;
+            }
+        }
+        return count;
+    }
+}
