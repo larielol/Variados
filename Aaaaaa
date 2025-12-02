@@ -1,1 +1,117 @@
-qaa
+import java.awt.image.BufferedImage;
+import java.io.File;
+import java.io.IOException;
+import javax.imageio.ImageIO;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+
+public class ImageMeanFilterConcurrent {
+    
+    private static AtomicInteger changedPixels = new AtomicInteger(0);
+    private static AtomicInteger unchangedPixels = new AtomicInteger(0);
+    
+    public static void main(String[] args) throws IOException, InterruptedException {
+        if (args.length < 2) {
+            System.err.println("Uso: java ImageMeanFilterConcurrent <imagem> <threads>");
+            System.exit(1);
+        }
+
+        String inputPath = args[0];
+        int numThreads = Integer.parseInt(args[1]);
+
+        BufferedImage originalImage = ImageIO.read(new File(inputPath));
+        BufferedImage filteredImage = new BufferedImage(
+            originalImage.getWidth(),
+            originalImage.getHeight(),
+            BufferedImage.TYPE_INT_RGB
+        );
+
+        int height = originalImage.getHeight();
+        int rowsPerThread = height / numThreads;
+        int remainingRows = height % numThreads;
+
+        ExecutorService executor = Executors.newFixedThreadPool(numThreads);
+        int startRow = 0;
+
+        for (int i = 0; i < numThreads; i++) {
+            int rows = rowsPerThread + (i < remainingRows ? 1 : 0);
+            if (rows == 0) continue;
+            int endRow = startRow + rows;
+            executor.submit(new FilterTask(originalImage, filteredImage, startRow, endRow));
+            startRow = endRow;
+        }
+
+        executor.shutdown();
+        executor.awaitTermination(1, TimeUnit.HOURS);
+
+        String outputPath = "filtered_concurrent.jpg";
+        ImageIO.write(filteredImage, "jpg", new File(outputPath));
+
+        System.out.println("Processamento concluído.");
+        System.out.println("Pixels alterados: " + changedPixels.get());
+        System.out.println("Pixels inalterados: " + unchangedPixels.get());
+    }
+
+    static class FilterTask implements Runnable {
+        private final BufferedImage original;
+        private final BufferedImage filtered;
+        private final int startY;
+        private final int endY;
+        private final int kernelSize = 7;
+
+        public FilterTask(BufferedImage original, BufferedImage filtered, int startY, int endY) {
+            this.original = original;
+            this.filtered = filtered;
+            this.startY = startY;
+            this.endY = endY;
+        }
+
+        @Override
+        public void run() {
+            int pad = kernelSize / 2;
+            int width = original.getWidth();
+
+            for (int y = startY; y < endY; y++) {
+                for (int x = 0; x < width; x++) {
+                    int[] avgColor = calculateNeighborhoodAverage(x, y, pad);
+                    int originalRGB = original.getRGB(x, y);
+                    int filteredRGB = (avgColor[0] << 16) | (avgColor[1] << 8) | avgColor[2];
+                    filtered.setRGB(x, y, filteredRGB);
+
+                    if (originalRGB == filteredRGB) {
+                        unchangedPixels.incrementAndGet();
+                    } else {
+                        changedPixels.incrementAndGet();
+                    }
+                }
+            }
+        }
+
+        private int[] calculateNeighborhoodAverage(int centerX, int centerY, int pad) {
+            long redSum = 0, greenSum = 0, blueSum = 0;
+            int pixelCount = 0;
+
+            for (int dy = -pad; dy <= pad; dy++) {
+                for (int dx = -pad; dx <= pad; dx++) {
+                    int x = centerX + dx;
+                    int y = centerY + dy;
+                    if (x >= 0 && x < original.getWidth() && y >= 0 && y < original.getHeight()) {
+                        int rgb = original.getRGB(x, y);
+                        redSum += (rgb >> 16) & 0xFF;
+                        greenSum += (rgb >> 8) & 0xFF;
+                        blueSum += rgb & 0xFF;
+                        pixelCount++;
+                    }
+                }
+            }
+
+            return new int[] {
+                (int)(redSum / pixelCount),
+                (int)(greenSum / pixelCount),
+                (int)(blueSum / pixelCount)
+            };
+        }
+    }
+}
