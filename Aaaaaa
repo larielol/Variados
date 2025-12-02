@@ -1,28 +1,157 @@
-Análise de Desempenho - Laboratório 4
+import java.awt.image.BufferedImage;
+import java.io.File;
+import java.io.IOException;
+import javax.imageio.ImageIO;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
-Imagem testada: 14MB_noise.jpg (4000x3000 pixels)
-Configurações testadas: 1, 2, 4, 8, 16 threads
+public class ImageMeanFilterConcurrent {
+    
+    // Contadores atômicos para pixels alterados/inalterados
+    private static AtomicInteger changedPixels = new AtomicInteger(0);
+    private static AtomicInteger unchangedPixels = new AtomicInteger(0);
+    
+    public static void main(String[] args) throws IOException, InterruptedException {
+        if (args.length < 2) {
+            System.err.println("Uso: java ImageMeanFilterConcurrent <imagem> <threads>");
+            System.err.println("Exemplo: java ImageMeanFilterConcurrent ../../data/small_sample.jpg 4");
+            System.exit(1);
+        }
 
-Resultados:
------------------------------------------------------------------
-Threads | Tempo (ms) | Speedup | Pixels Alterados | Pixels Iguais
------------------------------------------------------------------
-1       | 12540      | 1.00x   | 11.980.000       | 20.000
-2       | 6820       | 1.84x   | 11.980.000       | 20.000
-4       | 3920       | 3.20x   | 11.980.000       | 20.000
-8       | 3710       | 3.38x   | 11.980.000       | 20.000
-16      | 3850       | 3.26x   | 11.980.000       | 20.000
+        String inputPath = args[0];
+        int numThreads = Integer.parseInt(args[1]);
+        
+        if (numThreads < 2) {
+            System.err.println("Número de threads deve ser no mínimo 2");
+            System.exit(1);
+        }
 
-Observações:
-1. Speedup significativo até 4 threads, com ganho próximo ao ideal.
-2. Entre 4 e 8 threads, o ganho diminui devido ao overhead de gerenciamento.
-3. Com 16 threads, há pequena degradação devido à contenção de recursos.
-4. A contagem de pixels permanece constante, confirmando corretude.
+        // Carregar imagem
+        BufferedImage originalImage = ImageIO.read(new File(inputPath));
+        int width = originalImage.getWidth();
+        int height = originalImage.getHeight();
+        
+        // Criar imagem resultado
+        BufferedImage filteredImage = new BufferedImage(
+            width, height, BufferedImage.TYPE_INT_RGB
+        );
 
-Explicações:
-- Overhead de criação de threads: perceptível acima de 8 threads
-- Competição por memória/cache: threads acessam regiões adjacentes da imagem
-- Número ideal: 4-8 threads para esta imagem (depende dos núcleos da CPU)
+        // Resetar contadores
+        changedPixels.set(0);
+        unchangedPixels.set(0);
 
-Conclusão:
-A paralelização é eficaz, com ganhos até o limite dos núcleos físicos da CPU.
+        // Dividir trabalho entre threads (por linhas)
+        int rowsPerThread = height / numThreads;
+        int remainingRows = height % numThreads;
+        
+        ExecutorService executor = Executors.newFixedThreadPool(numThreads);
+        int startRow = 0;
+        
+        long startTime = System.currentTimeMillis();
+        
+        for (int i = 0; i < numThreads; i++) {
+            int rows = rowsPerThread + (i < remainingRows ? 1 : 0);
+            if (rows == 0) continue;
+            int endRow = startRow + rows;
+            executor.submit(new FilterTask(
+                originalImage, filteredImage, startRow, endRow, width
+            ));
+            startRow = endRow;
+        }
+
+        executor.shutdown();
+        executor.awaitTermination(1, TimeUnit.HOURS);
+        
+        long endTime = System.currentTimeMillis();
+
+        // Salvar imagem processada
+        String outputPath = "filtered_concurrent.jpg";
+        ImageIO.write(filteredImage, "jpg", new File(outputPath));
+        
+        // Exibir resultados
+        System.out.println("========================================");
+        System.out.println("PROCESSAMENTO CONCORRENTE CONCLUÍDO");
+        System.out.println("========================================");
+        System.out.println("Imagem de entrada: " + inputPath);
+        System.out.println("Threads utilizadas: " + numThreads);
+        System.out.println("Tempo total: " + (endTime - startTime) + " ms");
+        System.out.println("Dimensões: " + width + " x " + height + " pixels");
+        System.out.println("----------------------------------------");
+        System.out.println("Pixels alterados: " + changedPixels.get());
+        System.out.println("Pixels inalterados: " + unchangedPixels.get());
+        System.out.println("Total de pixels: " + (changedPixels.get() + unchangedPixels.get()));
+        System.out.println("Imagem salva como: " + outputPath);
+        System.out.println("========================================");
+    }
+
+    static class FilterTask implements Runnable {
+        private final BufferedImage original;
+        private final BufferedImage filtered;
+        private final int startY;
+        private final int endY;
+        private final int width;
+        private final int kernelSize = 7;
+        private final int pad;
+
+        public FilterTask(BufferedImage original, BufferedImage filtered, 
+                         int startY, int endY, int width) {
+            this.original = original;
+            this.filtered = filtered;
+            this.startY = startY;
+            this.endY = endY;
+            this.width = width;
+            this.pad = kernelSize / 2;
+        }
+
+        @Override
+        public void run() {
+            for (int y = startY; y < endY; y++) {
+                for (int x = 0; x < width; x++) {
+                    // Calcular média da vizinhança
+                    int[] avgColor = calculateNeighborhoodAverage(x, y);
+                    int filteredRGB = (avgColor[0] << 16) | (avgColor[1] << 8) | avgColor[2];
+                    
+                    // Obter pixel original
+                    int originalRGB = original.getRGB(x, y);
+                    
+                    // Aplicar filtro
+                    filtered.setRGB(x, y, filteredRGB);
+                    
+                    // Contar se pixel foi alterado ou não
+                    if (originalRGB == filteredRGB) {
+                        unchangedPixels.incrementAndGet();
+                    } else {
+                        changedPixels.incrementAndGet();
+                    }
+                }
+            }
+        }
+
+        private int[] calculateNeighborhoodAverage(int centerX, int centerY) {
+            long redSum = 0, greenSum = 0, blueSum = 0;
+            int pixelCount = 0;
+
+            for (int dy = -pad; dy <= pad; dy++) {
+                for (int dx = -pad; dx <= pad; dx++) {
+                    int x = centerX + dx;
+                    int y = centerY + dy;
+                    if (x >= 0 && x < width && y >= 0 && y < original.getHeight()) {
+                        int rgb = original.getRGB(x, y);
+                        redSum += (rgb >> 16) & 0xFF;
+                        greenSum += (rgb >> 8) & 0xFF;
+                        blueSum += rgb & 0xFF;
+                        pixelCount++;
+                    }
+                }
+            }
+
+            return new int[] {
+                (int)(redSum / pixelCount),
+                (int)(greenSum / pixelCount),
+                (int)(blueSum / pixelCount)
+            };
+        }
+    }
+}
