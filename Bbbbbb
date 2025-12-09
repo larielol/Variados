@@ -1,0 +1,175 @@
+Buffer.java
+
+import java.util.LinkedList;
+import java.util.Queue;
+import java.util.concurrent.Semaphore;
+
+class Buffer {
+    private final Queue<Integer> data = new LinkedList<>();
+    private final int capacity = 50;
+
+    private final Semaphore empty = new Semaphore(capacity); // espaços livres
+    private final Semaphore full = new Semaphore(0);         // itens disponíveis
+    private final Semaphore mutex = new Semaphore(1);         // exclusão mútua
+
+    public void put(int value) throws InterruptedException {
+        empty.acquire();   // espera espaço disponível
+        mutex.acquire();   // entra na região crítica
+
+        data.add(value);
+        System.out.println("Inserted: " + value + " | Buffer size: " + data.size());
+
+        mutex.release();
+        full.release();    // informa que agora há mais 1 item disponível
+    }
+
+    public int remove() throws InterruptedException {
+        full.acquire();    // espera ter item para consumir
+        mutex.acquire();   // RC
+
+        int value = data.remove();
+        System.out.println("Removed: " + value + " | Buffer size: " + data.size());
+
+        mutex.release();
+        empty.release();   // agora existe +1 espaço livre
+
+        return value;
+    }
+}
+
+
+
+Producer.java
+
+class Producer extends Thread {
+    private final Buffer buffer;
+    private final int maxItems;
+    private final int sleepTime;
+    private final int id;
+
+    public Producer(int id, Buffer buffer, int maxItems, int sleepTime) {
+        this.id = id;
+        this.buffer = buffer;
+        this.maxItems = maxItems;
+        this.sleepTime = sleepTime;
+    }
+
+    @Override
+    public void run() {
+        try {
+            for (int i = 0; i < maxItems; i++) {
+                Thread.sleep(sleepTime);
+
+                int item = (int) (Math.random() * 100);
+                System.out.println("Producer " + id + " produced item " + item);
+
+                buffer.put(item);
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    }
+}
+
+
+Consumer.java
+
+class Consumer extends Thread {
+    private final Buffer buffer;
+    private final int sleepTime;
+    private final int id;
+
+    public Consumer(int id, Buffer buffer, int sleepTime) {
+        this.id = id;
+        this.buffer = buffer;
+        this.sleepTime = sleepTime;
+    }
+
+    @Override
+    public void run() {
+        try {
+            while (true) {
+                int item = buffer.remove();
+                System.out.println("Consumer " + id + " consumed item " + item);
+
+                Thread.sleep(sleepTime);
+            }
+        } catch (InterruptedException e) {
+            System.out.println("Consumer " + id + " finished.");
+            Thread.currentThread().interrupt();
+        }
+    }
+}
+
+
+Main.java
+
+public class Main {
+    public static void main(String[] args) {
+        if (args.length != 5) {
+            System.out.println("Use: java Main <num_producers> <max_items_per_producer> <producing_time> <num_consumers> <consuming_time>");
+            return;
+        }
+
+        int numProducers = Integer.parseInt(args[0]);
+        int maxItemsPerProducer = Integer.parseInt(args[1]);
+        int producingTime = Integer.parseInt(args[2]);
+        int numConsumers = Integer.parseInt(args[3]);
+        int consumingTime = Integer.parseInt(args[4]);
+
+        Buffer buffer = new Buffer();
+
+        Producer[] producers = new Producer[numProducers];
+        Consumer[] consumers = new Consumer[numConsumers];
+
+        // cria consumers
+        for (int i = 0; i < numConsumers; i++) {
+            consumers[i] = new Consumer(i + 1, buffer, consumingTime);
+            consumers[i].start();
+        }
+
+        // cria producers
+        for (int i = 0; i < numProducers; i++) {
+            producers[i] = new Producer(i + 1, buffer, maxItemsPerProducer, producingTime);
+            producers[i].start();
+        }
+
+        // aguarda producers finalizarem
+        for (Producer p : producers) {
+            try { p.join(); } catch (InterruptedException e) {}
+        }
+
+        // envia sinal de parada (poison pill)
+        try {
+            for (int i = 0; i < numConsumers; i++) {
+                buffer.put(-1); 
+            }
+        } catch (Exception e) {}
+
+        System.out.println("\nAll producers finished. Sent poison pills.\n");
+
+        // aguarda consumers finalizarem
+        for (Consumer c : consumers) {
+            c.interrupt();
+        }
+    }
+}
+
+
+comments.txt
+
+Durante os testes da versão concorrente, rodei vários cenários mudando a quantidade de produtores, consumidores e os tempos. Aqui vão minhas observações:
+
+1) 1 produtor e 1 consumidor (tempos iguais)
+O sistema ficou bem estável. O buffer quase nunca ficava cheio ou vazio por muito tempo, e tudo rodou de forma bem sincronizada. Não notei nenhum comportamento estranho, nem itens sendo consumidos duas vezes.
+
+2) 5 produtores e 1 consumidor
+Nesse caso, o consumidor virou o gargalo. O buffer enchia fácil e os produtores começavam a ficar esperando. Quando o consumidor liberava espaço, os produtores voltavam a produzir. O limite de 50 itens realmente funcionou.
+
+3) 1 produtor e 4 consumidores
+Aqui aconteceu o contrário: os consumidores ficavam esperando porque o produtor não dava conta de alimentar todo mundo. O buffer vivia vazio, mas tudo funcionou certinho — ninguém acessou buffer vazio e não aconteceram erros.
+
+4) 3 produtores e 3 consumidores (tempos parecidos)
+Esse foi o cenário mais “balanceado”. O buffer ficava cheio às vezes, vazio às vezes, mas nada exagerado. A sincronização funcionou bem e não deu deadlock.
+
+No geral, os semáforos controlaram bem o acesso ao buffer. Produtores esperam quando está cheio, consumidores esperam quando está vazio, e o mutex evitou que duas threads mexessem no buffer ao mesmo tempo. O sistema se comportou como esperado em todos os testes.
