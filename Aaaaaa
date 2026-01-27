@@ -1,181 +1,103 @@
-Concorrente:
+import java.util.Random;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicInteger;
 
-Buffer.java: 
-import java.util.concurrent.Semaphore;
+class WebStats {
+    private AtomicLong totalAccess = new AtomicLong(0);
+    private AtomicInteger totalPurchases = new AtomicInteger(0);
+    private AtomicInteger totalFailures = new AtomicInteger(0);
+    private AtomicInteger totalNothing = new AtomicInteger(0);
+    private AtomicInteger onlineUsers = new AtomicInteger(0);
 
-class Buffer {
-    private final int[] data;
-    private final int capacity;
-    private int front = 0;
-    private int rear = 0;
-    
-    private final Semaphore mutex = new Semaphore(1);
-    private final Semaphore empty;
-    private final Semaphore full = new Semaphore(0);
-    
-    public Buffer(int capacity) {
-        this.capacity = capacity;
-        this.data = new int[capacity];
-        this.empty = new Semaphore(capacity);
+    public void access() {
+        totalAccess.incrementAndGet();
+        onlineUsers.incrementAndGet();
     }
-    
-    public void put(int value) throws InterruptedException {
-        empty.acquire(); // espera se buffer cheio
-        mutex.acquire();
-        
-        data[rear] = value;
-        rear = (rear + 1) % capacity;
-        System.out.println("Inserted: " + value + " | Buffer size: " + (full.availablePermits() + 1));
-        
-        mutex.release();
-        full.release(); // sinaliza que há um item disponível
+
+    public void purchase() {
+        totalPurchases.incrementAndGet();
     }
-    
-    public int remove() throws InterruptedException {
-        full.acquire(); // espera se buffer vazio
-        mutex.acquire();
-        
-        int value = data[front];
-        front = (front + 1) % capacity;
-        System.out.println("Removed: " + value + " | Buffer size: " + (full.availablePermits() - 1));
-        
-        mutex.release();
-        empty.release(); // libera um slot
-        return value;
+
+    public void failure() {
+        totalFailures.incrementAndGet();
+    }
+
+    public void nothing() {
+        totalNothing.incrementAndGet();
+    }
+
+    public void logout() {
+        onlineUsers.decrementAndGet();
+    }
+
+    public void printStats() {
+        System.out.println("========= Estatisticas do Sistema =========");
+        System.out.println("Total de Acessos: " + totalAccess.get());
+        System.out.println("Total de Compras: " + totalPurchases.get());
+        System.out.println("Total de Falhas: " + totalFailures.get());
+        System.out.println("Total de acessos sem compras ou falhas: " + totalNothing.get());
+        System.out.println("Usuarios Online: " + onlineUsers.get());
+        System.out.println("=======================================================");
     }
 }
 
+class UserSimulation implements Runnable {
+    private WebStats stats;
+    private Random random;
 
-Producer.java:
-class Producer implements Runnable {
-    private final Buffer buffer;
-    private final int maxItems;
-    private final int sleepTime;
-    private final int id;
-    
-    public Producer(int id, Buffer buffer, int maxItems, int sleepTime) {
-        this.id = id;
-        this.buffer = buffer;
-        this.maxItems = maxItems;
-        this.sleepTime = sleepTime;
+    public UserSimulation(WebStats stats) {
+        this.stats = stats;
+        this.random = new Random();
     }
-    
+
     @Override
     public void run() {
         try {
-            for (int i = 0; i < maxItems; i++) {
-                Thread.sleep(sleepTime);
-                int item = (int) (Math.random() * 100);
-                System.out.println("Producer " + id + " produced item " + item);
-                buffer.put(item);
+            stats.access();
+            Thread.sleep(random.nextInt(300));
+
+            int action = random.nextInt(3);
+            if (action == 0) {
+                stats.purchase();
+            } else if (action == 1) {
+                stats.failure();
+            } else {
+                stats.nothing();
             }
+
+            Thread.sleep(random.nextInt(200));
+            stats.logout();
+
         } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            System.out.println("Producer " + id + " interrupted.");
+            e.printStackTrace();
         }
-        System.out.println("Producer " + id + " finished.");
     }
 }
 
+public class WebStatsAtmVarMain {
+    public static void main(String[] args) {
+        if (args.length < 1) {
+            System.err.println("Usage: java WebStatsAtmVarMain number_users");
+            System.exit(1);
+        }
 
-Consumer.java:
-class Consumer implements Runnable {
-    private final Buffer buffer;
-    private final int sleepTime;
-    private final int id;
-    
-    public Consumer(int id, Buffer buffer, int sleepTime) {
-        this.id = id;
-        this.buffer = buffer;
-        this.sleepTime = sleepTime;
-    }
-    
-    @Override
-    public void run() {
-        while (true) {
+        int numUsers = Integer.valueOf(args[0]);
+        WebStats stats = new WebStats();
+        Thread[] users = new Thread[numUsers];
+
+        for (int i = 0; i < numUsers; i++) {
+            users[i] = new Thread(new UserSimulation(stats));
+            users[i].start();
+        }
+
+        for (int i = 0; i < numUsers; i++) {
             try {
-                int item = buffer.remove();
-                System.out.println("Consumer " + id + " consumed item " + item);
-                Thread.sleep(sleepTime);
+                users[i].join();
             } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                break;
+                e.printStackTrace();
             }
         }
+
+        stats.printStats();
     }
 }
-
-Main.java:
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-
-public class Main {
-    public static void main(String[] args) {
-        if (args.length != 5) {
-            System.out.println("Use: java Main <num_producers> <max_items_per_producer> <producing_time> <num_consumers> <consuming_time>");
-            return;
-        }
-        
-        int numProducers = Integer.parseInt(args[0]);
-        int maxItemsPerProducer = Integer.parseInt(args[1]);
-        int producingTime = Integer.parseInt(args[2]);
-        int numConsumers = Integer.parseInt(args[3]);
-        int consumingTime = Integer.parseInt(args[4]);
-        
-        Buffer buffer = new Buffer(50); // buffer limitado a 50
-        
-        ExecutorService executor = Executors.newCachedThreadPool();
-        
-        // Inicia produtores
-        for (int i = 1; i <= numProducers; i++) {
-            executor.execute(new Producer(i, buffer, maxItemsPerProducer, producingTime));
-        }
-        
-        // Inicia consumidores
-        for (int i = 1; i <= numConsumers; i++) {
-            executor.execute(new Consumer(i, buffer, consumingTime));
-        }
-        
-        executor.shutdown();
-    }
-}
-
-
-Comments.txt:
-Testes do Lab 5 - Produtor-Consumidor
-
-Fiz vários testes com diferentes configurações:
-
-1. 1 produtor, 1 consumidor (bash run.sh 1 10 100 1 150)
-   - Tudo certo, buffer controlado, sem erros.
-
-2. 3 produtores rápidos, 1 consumidor lento
-   - Buffer encheu até 50, produtores esperaram.
-   - Consumidor ditou o ritmo.
-
-3. 1 produtor lento, 3 consumidores rápidos
-   - Buffer ficou vazio várias vezes.
-   - Consumidores esperaram quando não tinha item.
-
-4. 10 produtores, 10 consumidores (todos rápidos)
-   - Bagunça nos logs, mas funcionou.
-   - Buffer ficou em 20-30 itens.
-
-5. Estresse: 20 produtores muito rápidos, 5 consumidores
-   - Buffer travou em 50, maioria dos produtores bloqueou.
-   - Sistema não crashou.
-
-O que funcionou bem:
-- Buffer nunca passou de 50.
-- Nunca removeu de buffer vazio.
-- Sem condições de corrida (pelo que vi).
-- FIFO respeitado.
-
-Problemas:
-- Logs se embaralham com muitas threads.
-- Consumidores não terminam (ficam em loop).
-- Difícil debugar quando tem muita coisa acontecendo.
-
-No geral, os semáforos controlaram bem. O empty e o full funcionam como contadores de espaço e itens, e o mutex protege o buffer. A solução atende todos os requisitos.
-
-Dica: testem com buffer pequeno (ex: 5) pra ver o bloqueio acontecendo mais rápido.
