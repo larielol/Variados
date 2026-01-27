@@ -1,42 +1,53 @@
 import java.util.Random;
-import java.util.concurrent.atomic.AtomicLong;
-import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.Semaphore;
 
 class WebStats {
-    private AtomicLong totalAccess = new AtomicLong(0);
-    private AtomicInteger totalPurchases = new AtomicInteger(0);
-    private AtomicInteger totalFailures = new AtomicInteger(0);
-    private AtomicInteger totalNothing = new AtomicInteger(0);
-    private AtomicInteger onlineUsers = new AtomicInteger(0);
+    private long totalAccess = 0;
+    private int totalPurchases = 0;
+    private int totalFailures = 0;
+    private int totalNothing = 0;
+    private int onlineUsers = 0;
 
-    public void access() {
-        totalAccess.incrementAndGet();
-        onlineUsers.incrementAndGet();
+    private Semaphore semaphore = new Semaphore(1); // Semáforo binário
+
+    public void access() throws InterruptedException {
+        semaphore.acquire();
+        totalAccess++;
+        onlineUsers++;
+        semaphore.release();
     }
 
-    public void purchase() {
-        totalPurchases.incrementAndGet();
+    public void purchase() throws InterruptedException {
+        semaphore.acquire();
+        totalPurchases++;
+        semaphore.release();
     }
 
-    public void failure() {
-        totalFailures.incrementAndGet();
+    public void failure() throws InterruptedException {
+        semaphore.acquire();
+        totalFailures++;
+        semaphore.release();
     }
 
-    public void nothing() {
-        totalNothing.incrementAndGet();
+    public void nothing() throws InterruptedException {
+        semaphore.acquire();
+        totalNothing++;
+        semaphore.release();
     }
 
-    public void logout() {
-        onlineUsers.decrementAndGet();
+    public void logout() throws InterruptedException {
+        semaphore.acquire();
+        onlineUsers--;
+        semaphore.release();
     }
 
     public void printStats() {
         System.out.println("========= Estatisticas do Sistema =========");
-        System.out.println("Total de Acessos: " + totalAccess.get());
-        System.out.println("Total de Compras: " + totalPurchases.get());
-        System.out.println("Total de Falhas: " + totalFailures.get());
-        System.out.println("Total de acessos sem compras ou falhas: " + totalNothing.get());
-        System.out.println("Usuarios Online: " + onlineUsers.get());
+        System.out.println("Total de Acessos: " + totalAccess);
+        System.out.println("Total de Compras: " + totalPurchases);
+        System.out.println("Total de Falhas: " + totalFailures);
+        System.out.println("Total de acessos sem compras ou falhas: " + totalNothing);
+        System.out.println("Usuarios Online: " + onlineUsers);
         System.out.println("=======================================================");
     }
 }
@@ -74,10 +85,10 @@ class UserSimulation implements Runnable {
     }
 }
 
-public class WebStatsAtmVarMain {
+public class WebStatsSemaphoreMain {
     public static void main(String[] args) {
         if (args.length < 1) {
-            System.err.println("Usage: java WebStatsAtmVarMain number_users");
+            System.err.println("Usage: java WebStatsSemaphoreMain number_users");
             System.exit(1);
         }
 
