@@ -11,13 +11,13 @@ func main() {
     ch := make(chan int)
     limite := 50
     
-    // Produtor
+    // Produtor (gera 10000 valores)
     go func() {
-        for {
+        for i := 0; i < 10000; i++ {
             v := rand.Intn(100)
             ch <- v
-            time.Sleep(10 * time.Millisecond) // Pequena pausa para simular assincronia
         }
+        close(ch) // Fecha o canal após gerar todos os valores
     }()
     
     // Consumidor
@@ -27,7 +27,9 @@ func main() {
                 fmt.Printf("Valor acima do limite: %d\n", v)
             }
         }
+        fmt.Println("Consumidor finalizado - canal fechado")
     }()
     
-    // Executar por 2 segundos para demonstração
-    time.Sleep(2 * time.Second)
+    // Aguarda término
+    time.Sleep(1 * time.Second)
+}
