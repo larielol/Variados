@@ -18,32 +18,40 @@ func produtor(id int, ch chan<- int, wg *sync.WaitGroup) {
     fmt.Printf("Produtor %d finalizou após gerar %d valores\n", id, n)
 }
 
-func consumidor(ch <-chan int, limite int) {
+func consumidor(id int, ch <-chan int, limite int, wg *sync.WaitGroup) {
+    defer wg.Done()
     for v := range ch {
         if v > limite {
-            fmt.Printf("Valor acima do limite: %d\n", v)
+            fmt.Printf("Consumidor %d recebeu: %d\n", id, v)
         }
     }
 }
 
 func main() {
     rand.Seed(time.Now().UnixNano())
-    ch := make(chan int, 100) // Canal bufferizado com 100 elementos
+    ch := make(chan int, 100)
     limite := 50
-    var wg sync.WaitGroup
+    var prodWg, consWg sync.WaitGroup
     
     // Dois produtores
     for i := 1; i <= 2; i++ {
-        wg.Add(1)
-        go produtor(i, ch, &wg)
+        prodWg.Add(1)
+        go produtor(i, ch, &prodWg)
     }
     
-    // Consumidor único
+    // Três consumidores
+    for i := 1; i <= 3; i++ {
+        consWg.Add(1)
+        go consumidor(i, ch, limite, &consWg)
+    }
+    
+    // Fecha canal após produtores terminarem
     go func() {
-        wg.Wait()
+        prodWg.Wait()
         close(ch)
     }()
     
-    consumidor(ch, limite)
-    fmt.Println("Processamento concluído")
+    // Aguarda consumidores terminarem
+    consWg.Wait()
+    fmt.Println("Processamento concluído por todos os consumidores")
 }
