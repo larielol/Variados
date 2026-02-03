@@ -1,12 +1,33 @@
-Com as soluções de concorrência (Semáforos ou Variáveis Atômicas), esperamos que:
+package main
 
-1. totalAccess = totalPurchases + totalFailures + totalNothing
-2. onlineUsers = 0 ao final da execução (todos os usuários fizeram logout)
-3. Os valores sejam consistentes e previsíveis em todas as execuções.
-4. Não ocorram condições de corrida (race conditions).
-5. As estatísticas finais sejam sempre as mesmas para o mesmo número de usuários.
+import (
+    "fmt"
+    "math/rand"
+    "time"
+)
 
-Já na versão sem controle, é provável que:
-- onlineUsers seja diferente de zero no final.
-- As somas das estatísticas não batam.
-- Valores variem a cada execução.
+func main() {
+    rand.Seed(time.Now().UnixNano())
+    ch := make(chan int)
+    limite := 50
+    
+    // Produtor
+    go func() {
+        for {
+            v := rand.Intn(100)
+            ch <- v
+            time.Sleep(10 * time.Millisecond) // Pequena pausa para simular assincronia
+        }
+    }()
+    
+    // Consumidor
+    go func() {
+        for v := range ch {
+            if v > limite {
+                fmt.Printf("Valor acima do limite: %d\n", v)
+            }
+        }
+    }()
+    
+    // Executar por 2 segundos para demonstração
+    time.Sleep(2 * time.Second)
