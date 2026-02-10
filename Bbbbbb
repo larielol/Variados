@@ -3,3 +3,187 @@ type Client struct {
     mu      sync.RWMutex
     hashMap map[int]string  // hash -> caminho do arquivo
 }
+
+
+package main
+
+import (
+    "bufio"
+    "encoding/gob"
+    "fmt"
+    "io"
+    "log"
+    "net"
+    "os"
+    "path/filepath"
+    "strconv"
+    "strings"
+    "sync"
+
+    "github.com/fsnotify/fsnotify"
+)
+
+type Client struct {
+    mu      sync.RWMutex
+    hashMap map[int]string
+}
+
+func NewClient() *Client {
+    return &Client{
+        hashMap: make(map[int]string),
+    }
+}
+
+// Métodos thread-safe para o cliente
+func (c *Client) AddHash(hash int, filePath string) {
+    c.mu.Lock()
+    defer c.mu.Unlock()
+    c.hashMap[hash] = filePath
+}
+
+func (c *Client) GetFilePath(hash int) (string, bool) {
+    c.mu.RLock()
+    defer c.mu.RUnlock()
+    filePath, exists := c.hashMap[hash]
+    return filePath, exists
+}
+
+func (c *Client) RemoveHash(hash int) {
+    c.mu.Lock()
+    defer c.mu.Unlock()
+    delete(c.hashMap, hash)
+}
+
+// Modificar updateServer para usar métodos thread-safe
+func updateServer(conn net.Conn, action string, filePath string, client *Client) {
+    encoder := gob.NewEncoder(conn)
+
+    if err := encoder.Encode(action); err != nil {
+        log.Println("Error encoding action:", err)
+        return
+    }
+
+    fileHash, err := sum(filePath)
+    if err != nil {
+        log.Printf("Error calculating hash for file %s: %v", filePath, err)
+        fileHash = 0
+    }
+
+    if err := encoder.Encode(fileHash); err != nil {
+        log.Println("Error encoding file hash:", err)
+        return
+    }
+
+    // Usar métodos thread-safe
+    if action == "create" {
+        client.AddHash(fileHash, filePath)
+    } else if action == "delete" {
+        client.RemoveHash(fileHash)
+    }
+
+    fmt.Printf("Server updated: %s - %s\n", action, filePath)
+}
+
+// Modificar handleDownloadRequest para usar métodos thread-safe
+func (s *Client) handleDownloadRequest(conn net.Conn, decoder *gob.Decoder) {
+    var fileHash int
+    if err := decoder.Decode(&fileHash); err != nil {
+        fmt.Println(err)
+        log.Println("Error decoding file hash:", err)
+        return
+    }
+
+    // Usar método thread-safe
+    filePath, exists := s.GetFilePath(fileHash)
+    if !exists {
+        log.Println("File not found for hash:", fileHash)
+        return
+    }
+
+    // Verificar se o caminho é absoluto ou relativo
+    var actualPath string
+    if filepath.IsAbs(filePath) {
+        actualPath = filePath
+    } else {
+        actualPath = "./" + filePath
+    }
+
+    file, err := os.Open(actualPath)
+    if err != nil {
+        log.Printf("Error opening file %s: %v", actualPath, err)
+        return
+    }
+    defer file.Close()
+
+    chunkData, err := io.ReadAll(file)
+    if err != nil {
+        log.Println("Error reading chunk data:", err)
+        return
+    }
+
+    encoder := gob.NewEncoder(conn)
+    if err := encoder.Encode(chunkData); err != nil {
+        log.Println("Error encoding chunk data:", err)
+        return
+    }
+
+    log.Printf("Chunk with hash %d sent successfully\n", fileHash)
+}
+
+// Adicionar funcionalidade para porta configurável
+func startClientServer(server *Client, port string) {
+    ln, err := net.Listen("tcp", ":"+port)
+    if err != nil {
+        log.Fatal(err)
+    }
+    defer ln.Close()
+
+    fmt.Printf("Client server is listening on port %s...\n", port)
+
+    for {
+        conn, err := ln.Accept()
+        if err != nil {
+            log.Println("Error accepting connection:", err)
+            continue
+        }
+        go server.handleConnection(conn)
+    }
+}
+
+// Modificar main para aceitar porta como argumento
+func main() {
+    // Configurar porta do cliente (default 9090)
+    peerPort := "9090"
+    if len(os.Args) > 1 {
+        peerPort = os.Args[1]
+    }
+
+    reader := bufio.NewReader(os.Stdin)
+    fmt.Print("Enter server IP: ")
+    serverIp, _ := reader.ReadString('\n')
+    serverIp = strings.TrimSpace(serverIp)
+
+    conn, err := net.Dial("tcp", serverIp+":8080")
+    if err != nil {
+        log.Fatal(err)
+    }
+    defer conn.Close()
+
+    directory := "./dataset/"
+    initialHashes := generateFilesHashMap(directory)
+    storeHashes(conn, initialHashes)
+
+    server := NewClient()
+    
+    // Inicializar hashMap com os arquivos iniciais
+    for filePath, hashes := range initialHashes {
+        for _, hash := range hashes {
+            server.AddHash(hash, filePath)
+        }
+    }
+    
+    go monitorDirectory(conn, directory, server)
+    go startClientServer(server, peerPort)
+
+    // Resto do código permanece igual...
+}
