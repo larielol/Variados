@@ -1,3 +1,10 @@
+// server/main.go
+type Server struct {
+    mu          sync.RWMutex
+    hashMap    map[int][]string  // hash -> lista de IPs
+    clientData map[string][]int  // IP do cliente -> lista de hashes
+}
+
 package main
 
 import (
