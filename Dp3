@@ -1,43 +1,101 @@
-package helpers
+import java.io.BufferedReader;
+import java.io.FileReader;
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
-import (
-    "fmt"
-    "io/ioutil"
-    "log"
-    "os"
-    "path/filepath"
-    "sync"
-)
-
-// Versão COM concorrência usando goroutines e channels
-func generateFilesHashMapConcurrent(diretorio string) map[string][]int {
-    if _, err := os.Stat(diretorio); os.IsNotExist(err) {
-        log.Fatalf("O diretório %s não existe", diretorio)
+public class LogAnalyzer4 {
+    
+    static class FileResult {
+        private final int count200;
+        private final int count500;
+        
+        public FileResult(int count200, int count500) {
+            this.count200 = count200;
+            this.count500 = count500;
+        }
+        
+        public int getCount200() { return count200; }
+        public int getCount500() { return count500; }
     }
-
-    files := listarArquivos(diretorio)
-    result := make(map[string][]int)
     
-    var wg sync.WaitGroup
-    var mu sync.Mutex
-    
-    for _, name := range files {
-        wg.Add(1)
-        go func(filename string) {
-            defer wg.Done()
+    static class FileProcessor implements Callable<FileResult> {
+        private final String fileName;
+        
+        public FileProcessor(String fileName) {
+            this.fileName = fileName;
+        }
+        
+        @Override
+        public FileResult call() throws Exception {
+            System.out.println("Processando arquivo: " + fileName);
+            int count200 = 0;
+            int count500 = 0;
             
-            fp := filepath.Join(diretorio, filename)
-            fileSum, err := sum(fp)
-            if err != nil {
-                fileSum = 0
+            try (BufferedReader br = new BufferedReader(new FileReader(fileName))) {
+                String line;
+                while ((line = br.readLine()) != null) {
+                    String[] parts = line.split(" ");
+                    if (parts.length == 3) {
+                        String code = parts[2];
+                        if (code.equals("200")) {
+                            count200++;
+                        } else if (code.equals("500")) {
+                            count500++;
+                        }
+                    }
+                }
+            } catch (IOException e) {
+                System.err.println("Erro ao ler arquivo: " + fileName);
+                throw e;
             }
             
-            mu.Lock()
-            result[fp] = []int{fileSum}
-            mu.Unlock()
-        }(name)
+            return new FileResult(count200, count500);
+        }
     }
-    
-    wg.Wait()
-    return result
+
+    public static void main(String[] args) {
+        if (args.length == 0) {
+            System.out.println("Uso: java LogAnalyzer4 <arquivos_de_log>");
+            System.exit(1);
+        }
+
+        int numThreads = Runtime.getRuntime().availableProcessors();
+        ExecutorService executor = Executors.newFixedThreadPool(numThreads);
+        
+        List<Future<FileResult>> futures = new ArrayList<>();
+        
+        // Submeter tarefas Callable
+        for (String fileName : args) {
+            Future<FileResult> future = executor.submit(new FileProcessor(fileName));
+            futures.add(future);
+        }
+        
+        // Consolidar resultados
+        int total200 = 0;
+        int total500 = 0;
+        
+        for (Future<FileResult> future : futures) {
+            try {
+                FileResult result = future.get(); // Aguarda o resultado
+                total200 += result.getCount200();
+                total500 += result.getCount500();
+            } catch (Exception e) {
+                System.err.println("Erro ao processar resultado: " + e.getMessage());
+                e.printStackTrace();
+            }
+        }
+        
+        // Encerrar executor
+        executor.shutdown();
+        
+        System.out.println("===== RESULTADO FINAL =====");
+        System.out.println("Total 200: " + total200);
+        System.out.println("Total 500: " + total500);
+    }
 }
