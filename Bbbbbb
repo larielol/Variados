@@ -1,189 +1,89 @@
-// client/main.go
-type Client struct {
-    mu      sync.RWMutex
-    hashMap map[int]string  // hash -> caminho do arquivo
-}
+import java.io.BufferedReader;
+import java.io.FileReader;
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
-
-package main
-
-import (
-    "bufio"
-    "encoding/gob"
-    "fmt"
-    "io"
-    "log"
-    "net"
-    "os"
-    "path/filepath"
-    "strconv"
-    "strings"
-    "sync"
-
-    "github.com/fsnotify/fsnotify"
-)
-
-type Client struct {
-    mu      sync.RWMutex
-    hashMap map[int]string
-}
-
-func NewClient() *Client {
-    return &Client{
-        hashMap: make(map[int]string),
-    }
-}
-
-// Métodos thread-safe para o cliente
-func (c *Client) AddHash(hash int, filePath string) {
-    c.mu.Lock()
-    defer c.mu.Unlock()
-    c.hashMap[hash] = filePath
-}
-
-func (c *Client) GetFilePath(hash int) (string, bool) {
-    c.mu.RLock()
-    defer c.mu.RUnlock()
-    filePath, exists := c.hashMap[hash]
-    return filePath, exists
-}
-
-func (c *Client) RemoveHash(hash int) {
-    c.mu.Lock()
-    defer c.mu.Unlock()
-    delete(c.hashMap, hash)
-}
-
-// Modificar updateServer para usar métodos thread-safe
-func updateServer(conn net.Conn, action string, filePath string, client *Client) {
-    encoder := gob.NewEncoder(conn)
-
-    if err := encoder.Encode(action); err != nil {
-        log.Println("Error encoding action:", err)
-        return
-    }
-
-    fileHash, err := sum(filePath)
-    if err != nil {
-        log.Printf("Error calculating hash for file %s: %v", filePath, err)
-        fileHash = 0
-    }
-
-    if err := encoder.Encode(fileHash); err != nil {
-        log.Println("Error encoding file hash:", err)
-        return
-    }
-
-    // Usar métodos thread-safe
-    if action == "create" {
-        client.AddHash(fileHash, filePath)
-    } else if action == "delete" {
-        client.RemoveHash(fileHash)
-    }
-
-    fmt.Printf("Server updated: %s - %s\n", action, filePath)
-}
-
-// Modificar handleDownloadRequest para usar métodos thread-safe
-func (s *Client) handleDownloadRequest(conn net.Conn, decoder *gob.Decoder) {
-    var fileHash int
-    if err := decoder.Decode(&fileHash); err != nil {
-        fmt.Println(err)
-        log.Println("Error decoding file hash:", err)
-        return
-    }
-
-    // Usar método thread-safe
-    filePath, exists := s.GetFilePath(fileHash)
-    if !exists {
-        log.Println("File not found for hash:", fileHash)
-        return
-    }
-
-    // Verificar se o caminho é absoluto ou relativo
-    var actualPath string
-    if filepath.IsAbs(filePath) {
-        actualPath = filePath
-    } else {
-        actualPath = "./" + filePath
-    }
-
-    file, err := os.Open(actualPath)
-    if err != nil {
-        log.Printf("Error opening file %s: %v", actualPath, err)
-        return
-    }
-    defer file.Close()
-
-    chunkData, err := io.ReadAll(file)
-    if err != nil {
-        log.Println("Error reading chunk data:", err)
-        return
-    }
-
-    encoder := gob.NewEncoder(conn)
-    if err := encoder.Encode(chunkData); err != nil {
-        log.Println("Error encoding chunk data:", err)
-        return
-    }
-
-    log.Printf("Chunk with hash %d sent successfully\n", fileHash)
-}
-
-// Adicionar funcionalidade para porta configurável
-func startClientServer(server *Client, port string) {
-    ln, err := net.Listen("tcp", ":"+port)
-    if err != nil {
-        log.Fatal(err)
-    }
-    defer ln.Close()
-
-    fmt.Printf("Client server is listening on port %s...\n", port)
-
-    for {
-        conn, err := ln.Accept()
-        if err != nil {
-            log.Println("Error accepting connection:", err)
-            continue
-        }
-        go server.handleConnection(conn)
-    }
-}
-
-// Modificar main para aceitar porta como argumento
-func main() {
-    // Configurar porta do cliente (default 9090)
-    peerPort := "9090"
-    if len(os.Args) > 1 {
-        peerPort = os.Args[1]
-    }
-
-    reader := bufio.NewReader(os.Stdin)
-    fmt.Print("Enter server IP: ")
-    serverIp, _ := reader.ReadString('\n')
-    serverIp = strings.TrimSpace(serverIp)
-
-    conn, err := net.Dial("tcp", serverIp+":8080")
-    if err != nil {
-        log.Fatal(err)
-    }
-    defer conn.Close()
-
-    directory := "./dataset/"
-    initialHashes := generateFilesHashMap(directory)
-    storeHashes(conn, initialHashes)
-
-    server := NewClient()
+public class LogAnalyzer3 {
     
-    // Inicializar hashMap com os arquivos iniciais
-    for filePath, hashes := range initialHashes {
-        for _, hash := range hashes {
-            server.AddHash(hash, filePath)
-        }
+    static class Result {
+        int count200 = 0;
+        int count500 = 0;
     }
     
-    go monitorDirectory(conn, directory, server)
-    go startClientServer(server, peerPort)
+    static class FileProcessor implements Runnable {
+        private final String fileName;
+        private final Result result;
+        
+        public FileProcessor(String fileName, Result result) {
+            this.fileName = fileName;
+            this.result = result;
+        }
+        
+        @Override
+        public void run() {
+            System.out.println("Processando arquivo: " + fileName);
+            try (BufferedReader br = new BufferedReader(new FileReader(fileName))) {
+                String line;
+                while ((line = br.readLine()) != null) {
+                    String[] parts = line.split(" ");
+                    if (parts.length == 3) {
+                        String code = parts[2];
+                        if (code.equals("200")) {
+                            result.count200++;
+                        } else if (code.equals("500")) {
+                            result.count500++;
+                        }
+                    }
+                }
+            } catch (IOException e) {
+                System.err.println("Erro ao ler arquivo: " + fileName);
+                e.printStackTrace();
+            }
+        }
+    }
 
-    // Resto do código permanece igual...
+    public static void main(String[] args) {
+        if (args.length == 0) {
+            System.out.println("Uso: java LogAnalyzer3 <arquivos_de_log>");
+            System.exit(1);
+        }
+
+        // Escolha do tipo de ExecutorService
+        // Para este caso, FixedThreadPool é o mais adequado
+        int numThreads = Runtime.getRuntime().availableProcessors();
+        ExecutorService executor = Executors.newFixedThreadPool(numThreads);
+        
+        List<Result> results = new ArrayList<>();
+        
+        // Submeter tarefas ao executor
+        for (String fileName : args) {
+            Result result = new Result();
+            results.add(result);
+            executor.execute(new FileProcessor(fileName, result));
+        }
+        
+        // Encerrar executor e aguardar término
+        executor.shutdown();
+        try {
+            executor.awaitTermination(Long.MAX_VALUE, TimeUnit.NANOSECONDS);
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        }
+        
+        // Consolidar resultados
+        int total200 = 0;
+        int total500 = 0;
+        for (Result result : results) {
+            total200 += result.count200;
+            total500 += result.count500;
+        }
+        
+        System.out.println("===== RESULTADO FINAL =====");
+        System.out.println("Total 200: " + total200);
+        System.out.println("Total 500: " + total500);
+    }
 }
